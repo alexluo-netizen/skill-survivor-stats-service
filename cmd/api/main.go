@@ -8,7 +8,16 @@ import (
 	"time"
 )
 
-
+type GameRun struct {
+	ID              string `json:"id"`
+	PlayerID        string `json:"player_id"`
+	SurvivalSeconds int    `json:"survival_seconds"`
+	Level           int    `json:"level"`
+	NormalKills     int    `json:"normal_kills"`
+	FastKills       int    `json:"fast_kills"`
+	TankKills       int    `json:"tank_kills"`
+	Result          string `json:"result"`
+}
 
 func main() {
 	mux := http.NewServeMux()
