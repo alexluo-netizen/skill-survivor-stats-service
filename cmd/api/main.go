@@ -8,13 +8,15 @@ import (
 	"time"
 )
 
+
+
 func main() {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/healthz", healthHandler)
 
 	server := &http.Server{
-		Addr:              ":8080",
+		Addr:              "127.0.0.1:8080",
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
