@@ -39,6 +39,16 @@ func (s *GameRunStore) Create(run GameRun) GameRun {
 	return run
 }
 
+func (s *GameRunStore) All() []GameRun {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	copiedRuns := make([]GameRun, len(s.runs))
+	copy(copiedRuns, s.runs)
+
+	return copiedRuns
+}
+
 func main() {
 	store := &GameRunStore{
 		runs: make([]GameRun, 0),
@@ -82,7 +92,16 @@ func gameRunsHandler(
 	r *http.Request,
 	store *GameRunStore,
 ) {
-	if r.Method != http.MethodPost {
+	switch r.Method {
+	case http.MethodGet:
+		runs := store.All()
+		writeJSON(w, http.StatusOK, runs)
+		return
+
+	case http.MethodPost:
+	// 继续执行下面原有的 Decode、validation 和 Create 代码。
+
+	default:
 		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
