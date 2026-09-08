@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -22,13 +23,36 @@ type GameRun struct {
 	Result          string `json:"result"`
 }
 
+type GameRunStats struct {
+	TotalRuns           int64 `json:"total_runs"`
+	BestSurvivalSeconds int   `json:"best_survival_seconds"`
+	HighestLevel        int   `json:"highest_level"`
+	TotalNormalKills    int64 `json:"total_normal_kills"`
+	TotalFastKills      int64 `json:"total_fast_kills"`
+	TotalTankKills      int64 `json:"total_tank_kills"`
+	TotalKills          int64 `json:"total_kills"`
+}
+
+type GameRunRepository interface {
+	Create(ctx context.Context, run GameRun) (GameRun, error)
+	All(ctx context.Context) ([]GameRun, error)
+	Stats(ctx context.Context) (GameRunStats, error)
+}
+
 type GameRunStore struct {
 	mu     sync.RWMutex
 	runs   []GameRun
 	nextID int
 }
 
-func (s *GameRunStore) Create(run GameRun) GameRun {
+func (s *GameRunStore) Create(
+	ctx context.Context,
+	run GameRun,
+) (GameRun, error) {
+	if err := ctx.Err(); err != nil {
+		return GameRun{}, err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -36,22 +60,120 @@ func (s *GameRunStore) Create(run GameRun) GameRun {
 	run.ID = strconv.Itoa(s.nextID)
 	s.runs = append(s.runs, run)
 
-	return run
+	return run, nil
 }
 
-func (s *GameRunStore) All() []GameRun {
+func (s *GameRunStore) All(
+	ctx context.Context,
+) ([]GameRun, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	copiedRuns := make([]GameRun, len(s.runs))
 	copy(copiedRuns, s.runs)
 
-	return copiedRuns
+	return copiedRuns, nil
+}
+
+func (s *GameRunStore) Stats(ctx context.Context) (GameRunStats, error) {
+	if err := ctx.Err(); err != nil {
+		return GameRunStats{}, err
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	stats := GameRunStats{
+		TotalRuns: int64(len(s.runs)),
+	}
+
+	for _, run := range s.runs {
+		if run.SurvivalSeconds > stats.BestSurvivalSeconds {
+			stats.BestSurvivalSeconds = run.SurvivalSeconds
+		}
+
+		if run.Level > stats.HighestLevel {
+			stats.HighestLevel = run.Level
+		}
+
+		stats.TotalNormalKills += int64(run.NormalKills)
+		stats.TotalFastKills += int64(run.FastKills)
+		stats.TotalTankKills += int64(run.TankKills)
+	}
+
+	stats.TotalKills =
+		stats.TotalNormalKills +
+			stats.TotalFastKills +
+			stats.TotalTankKills
+
+	return stats, nil
+}
+
+func gameRunStatsHandler(
+	store GameRunRepository,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(
+				w,
+				"method not allowed",
+				http.StatusMethodNotAllowed,
+			)
+			return
+		}
+
+		stats, err := store.Stats(r.Context())
+		if err != nil {
+			slog.Error(
+				"could not calculate game statistics",
+				"error",
+				err,
+			)
+			http.Error(
+				w,
+				"internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if err := json.NewEncoder(w).Encode(stats); err != nil {
+			slog.Error(
+				"could not encode game statistics",
+				"error",
+				err,
+			)
+		}
+	}
 }
 
 func main() {
-	store := &GameRunStore{
-		runs: make([]GameRun, 0),
+	config, err := loadConfig()
+	if err != nil {
+		slog.Error("could not load configuration", "error", err)
+		os.Exit(1)
+	}
+
+	databaseContext, cancel := context.WithTimeout(
+		context.Background(),
+		10*time.Second,
+	)
+	defer cancel()
+
+	store, err := NewMySQLGameRunStore(
+		databaseContext,
+		config.MySQLDSN(),
+	)
+	if err != nil {
+		slog.Error("could not connect to MySQL", "error", err)
+		os.Exit(1)
 	}
 
 	mux := http.NewServeMux()
@@ -61,6 +183,8 @@ func main() {
 	mux.HandleFunc("/api/v1/game-runs", func(w http.ResponseWriter, r *http.Request) {
 		gameRunsHandler(w, r, store)
 	})
+
+	mux.HandleFunc("/api/v1/game-runs/stats", gameRunStatsHandler(store))
 
 	server := &http.Server{
 		Addr:              "127.0.0.1:8080",
@@ -90,11 +214,25 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 func gameRunsHandler(
 	w http.ResponseWriter,
 	r *http.Request,
-	store *GameRunStore,
+	store GameRunRepository,
 ) {
 	switch r.Method {
 	case http.MethodGet:
-		runs := store.All()
+		runs, err := store.All(r.Context())
+		if err != nil {
+			slog.Error(
+				"failed to list game runs",
+				"error", err,
+			)
+
+			writeJSONError(
+				w,
+				"failed to list game runs",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
 		writeJSON(w, http.StatusOK, runs)
 		return
 
@@ -140,7 +278,24 @@ func gameRunsHandler(
 		return
 	}
 
-	createdRun := store.Create(run)
+	createdRun, err := store.Create(
+		r.Context(),
+		run,
+	)
+
+	if err != nil {
+		slog.Error(
+			"failed to create game run",
+			"error", err,
+		)
+
+		writeJSONError(
+			w,
+			"failed to create game run",
+			http.StatusInternalServerError,
+		)
+		return
+	}
 
 	slog.Info(
 		"game run created",
