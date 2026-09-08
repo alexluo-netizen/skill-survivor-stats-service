@@ -75,8 +75,25 @@ func (s *GameRunStore) All(
 }
 
 func main() {
-	store := &GameRunStore{
-		runs: make([]GameRun, 0),
+	config, err := loadConfig()
+	if err != nil {
+		slog.Error("could not load configuration", "error", err)
+		os.Exit(1)
+	}
+
+	databaseContext, cancel := context.WithTimeout(
+		context.Background(),
+		10*time.Second,
+	)
+	defer cancel()
+
+	store, err := NewMySQLGameRunStore(
+		databaseContext,
+		config.MySQLDSN(),
+	)
+	if err != nil {
+		slog.Error("could not connect to MySQL", "error", err)
+		os.Exit(1)
 	}
 
 	mux := http.NewServeMux()
