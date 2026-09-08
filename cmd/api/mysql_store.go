@@ -139,3 +139,33 @@ func (s *MySQLGameRunStore) All(
 
 	return runs, nil
 }
+
+func (s *MySQLGameRunStore) Stats(
+	ctx context.Context,
+) (GameRunStats, error) {
+	var stats GameRunStats
+
+	err := s.db.WithContext(ctx).
+		Model(&gameRunRecord{}).
+		Select(`
+			COUNT(*) AS total_runs,
+			COALESCE(MAX(survival_seconds), 0) AS best_survival_seconds,
+			COALESCE(MAX(level), 0) AS highest_level,
+			COALESCE(SUM(normal_kills), 0) AS total_normal_kills,
+			COALESCE(SUM(fast_kills), 0) AS total_fast_kills,
+			COALESCE(SUM(tank_kills), 0) AS total_tank_kills,
+			COALESCE(
+				SUM(normal_kills + fast_kills + tank_kills),
+				0
+			) AS total_kills
+		`).
+		Scan(&stats).Error
+	if err != nil {
+		return GameRunStats{}, fmt.Errorf(
+			"calculate game run stats: %w",
+			err,
+		)
+	}
+
+	return stats, nil
+}

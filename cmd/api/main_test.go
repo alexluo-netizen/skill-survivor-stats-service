@@ -287,3 +287,75 @@ func TestGameRunsHandlerRejectsInvalidInput(t *testing.T) {
 		})
 	}
 }
+
+func TestGameRunStatsHandlerReturnsStats(t *testing.T) {
+	store := &GameRunStore{
+		runs: make([]GameRun, 0),
+	}
+
+	ctx := context.Background()
+
+	testRuns := []GameRun{
+		{
+			PlayerID:        "player-001",
+			SurvivalSeconds: 120,
+			Level:           3,
+			NormalKills:     10,
+			FastKills:       2,
+			TankKills:       1,
+			Result:          "completed",
+		},
+		{
+			PlayerID:        "player-001",
+			SurvivalSeconds: 185,
+			Level:           4,
+			NormalKills:     12,
+			FastKills:       5,
+			TankKills:       2,
+			Result:          "defeated",
+		},
+	}
+
+	for _, run := range testRuns {
+		if _, err := store.Create(ctx, run); err != nil {
+			t.Fatalf("Create() returned an error: %v", err)
+		}
+	}
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/game-runs/stats",
+		nil,
+	)
+	response := httptest.NewRecorder()
+
+	gameRunStatsHandler(store).ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"status code = %d, want %d",
+			response.Code,
+			http.StatusOK,
+		)
+	}
+
+	var got GameRunStats
+
+	if err := json.NewDecoder(response.Body).Decode(&got); err != nil {
+		t.Fatalf("could not decode response: %v", err)
+	}
+
+	want := GameRunStats{
+		TotalRuns:           2,
+		BestSurvivalSeconds: 185,
+		HighestLevel:        4,
+		TotalNormalKills:    22,
+		TotalFastKills:      7,
+		TotalTankKills:      3,
+		TotalKills:          32,
+	}
+
+	if got != want {
+		t.Errorf("stats = %+v, want %+v", got, want)
+	}
+}

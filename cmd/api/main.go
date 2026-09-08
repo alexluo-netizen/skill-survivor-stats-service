@@ -23,15 +23,20 @@ type GameRun struct {
 	Result          string `json:"result"`
 }
 
-type GameRunRepository interface {
-	Create(
-		ctx context.Context,
-		run GameRun,
-	) (GameRun, error)
+type GameRunStats struct {
+	TotalRuns           int64 `json:"total_runs"`
+	BestSurvivalSeconds int   `json:"best_survival_seconds"`
+	HighestLevel        int   `json:"highest_level"`
+	TotalNormalKills    int64 `json:"total_normal_kills"`
+	TotalFastKills      int64 `json:"total_fast_kills"`
+	TotalTankKills      int64 `json:"total_tank_kills"`
+	TotalKills          int64 `json:"total_kills"`
+}
 
-	All(
-		ctx context.Context,
-	) ([]GameRun, error)
+type GameRunRepository interface {
+	Create(ctx context.Context, run GameRun) (GameRun, error)
+	All(ctx context.Context) ([]GameRun, error)
+	Stats(ctx context.Context) (GameRunStats, error)
 }
 
 type GameRunStore struct {
@@ -74,6 +79,81 @@ func (s *GameRunStore) All(
 	return copiedRuns, nil
 }
 
+func (s *GameRunStore) Stats(ctx context.Context) (GameRunStats, error) {
+	if err := ctx.Err(); err != nil {
+		return GameRunStats{}, err
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	stats := GameRunStats{
+		TotalRuns: int64(len(s.runs)),
+	}
+
+	for _, run := range s.runs {
+		if run.SurvivalSeconds > stats.BestSurvivalSeconds {
+			stats.BestSurvivalSeconds = run.SurvivalSeconds
+		}
+
+		if run.Level > stats.HighestLevel {
+			stats.HighestLevel = run.Level
+		}
+
+		stats.TotalNormalKills += int64(run.NormalKills)
+		stats.TotalFastKills += int64(run.FastKills)
+		stats.TotalTankKills += int64(run.TankKills)
+	}
+
+	stats.TotalKills =
+		stats.TotalNormalKills +
+			stats.TotalFastKills +
+			stats.TotalTankKills
+
+	return stats, nil
+}
+
+func gameRunStatsHandler(
+	store GameRunRepository,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(
+				w,
+				"method not allowed",
+				http.StatusMethodNotAllowed,
+			)
+			return
+		}
+
+		stats, err := store.Stats(r.Context())
+		if err != nil {
+			slog.Error(
+				"could not calculate game statistics",
+				"error",
+				err,
+			)
+			http.Error(
+				w,
+				"internal server error",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if err := json.NewEncoder(w).Encode(stats); err != nil {
+			slog.Error(
+				"could not encode game statistics",
+				"error",
+				err,
+			)
+		}
+	}
+}
+
 func main() {
 	config, err := loadConfig()
 	if err != nil {
@@ -103,6 +183,8 @@ func main() {
 	mux.HandleFunc("/api/v1/game-runs", func(w http.ResponseWriter, r *http.Request) {
 		gameRunsHandler(w, r, store)
 	})
+
+	mux.HandleFunc("/api/v1/game-runs/stats", gameRunStatsHandler(store))
 
 	server := &http.Server{
 		Addr:              "127.0.0.1:8080",
