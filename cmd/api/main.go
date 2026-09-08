@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -22,13 +23,31 @@ type GameRun struct {
 	Result          string `json:"result"`
 }
 
+type GameRunRepository interface {
+	Create(
+		ctx context.Context,
+		run GameRun,
+	) (GameRun, error)
+
+	All(
+		ctx context.Context,
+	) ([]GameRun, error)
+}
+
 type GameRunStore struct {
 	mu     sync.RWMutex
 	runs   []GameRun
 	nextID int
 }
 
-func (s *GameRunStore) Create(run GameRun) GameRun {
+func (s *GameRunStore) Create(
+	ctx context.Context,
+	run GameRun,
+) (GameRun, error) {
+	if err := ctx.Err(); err != nil {
+		return GameRun{}, err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -36,17 +55,23 @@ func (s *GameRunStore) Create(run GameRun) GameRun {
 	run.ID = strconv.Itoa(s.nextID)
 	s.runs = append(s.runs, run)
 
-	return run
+	return run, nil
 }
 
-func (s *GameRunStore) All() []GameRun {
+func (s *GameRunStore) All(
+	ctx context.Context,
+) ([]GameRun, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	copiedRuns := make([]GameRun, len(s.runs))
 	copy(copiedRuns, s.runs)
 
-	return copiedRuns
+	return copiedRuns, nil
 }
 
 func main() {
@@ -90,11 +115,25 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 func gameRunsHandler(
 	w http.ResponseWriter,
 	r *http.Request,
-	store *GameRunStore,
+	store GameRunRepository,
 ) {
 	switch r.Method {
 	case http.MethodGet:
-		runs := store.All()
+		runs, err := store.All(r.Context())
+		if err != nil {
+			slog.Error(
+				"failed to list game runs",
+				"error", err,
+			)
+
+			writeJSONError(
+				w,
+				"failed to list game runs",
+				http.StatusInternalServerError,
+			)
+			return
+		}
+
 		writeJSON(w, http.StatusOK, runs)
 		return
 
@@ -140,7 +179,24 @@ func gameRunsHandler(
 		return
 	}
 
-	createdRun := store.Create(run)
+	createdRun, err := store.Create(
+		r.Context(),
+		run,
+	)
+
+	if err != nil {
+		slog.Error(
+			"failed to create game run",
+			"error", err,
+		)
+
+		writeJSONError(
+			w,
+			"failed to create game run",
+			http.StatusInternalServerError,
+		)
+		return
+	}
 
 	slog.Info(
 		"game run created",
