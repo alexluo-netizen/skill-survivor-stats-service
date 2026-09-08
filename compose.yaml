@@ -1,0 +1,30 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: skill-survivor-mysql
+    restart: unless-stopped
+
+    environment:
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+
+    ports:
+      - "127.0.0.1:${DB_PORT}:3306"
+
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mysqladmin ping -h localhost -u root -p$$MYSQL_ROOT_PASSWORD --silent"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  mysql_data:

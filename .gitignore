@@ -12,6 +12,7 @@ coverage.out
 # Environment and local configuration
 .env
 .env.*
+!.env.example
 
 # IDE
 .vscode/
@@ -20,3 +21,4 @@ coverage.out
 # OS
 .DS_Store
 Thumbs.db
+
