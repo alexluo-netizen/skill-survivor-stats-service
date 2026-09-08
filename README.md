@@ -125,8 +125,6 @@ curl -i -X POST http://127.0.0.1:8080/api/v1/game-runs \
   }'
 ```
 
-On Windows PowerShell, use Invoke-WebRequest or place the curl command on one line.
-
 The API returns `201 Created` with the stored record and its assigned ID.
 
 ## List Game Runs
